@@ -24,7 +24,7 @@ for lam in lambdas:
     cycle, trend = sm.tsa.filters.hpfilter(log_gdp, lamb=lam)
     plt.plot(trend, label=f"Trend (λ={lam})", linewidth=1.5)
 
-plt.title("Original GDP and HP Filter Trends (λ = 10, 100, 1600)")
+plt.title("GDP and HP Filter Trends (λ = 10, 100, 1600)")
 plt.xlabel("Date")
 plt.ylabel("Log GDP")
 plt.legend()
