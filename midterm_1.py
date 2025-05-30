@@ -1,5 +1,6 @@
 import statsmodels.api as sm
 import pandas_datareader as pdr
+import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 
