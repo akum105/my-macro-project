@@ -1,86 +1,66 @@
 import pandas as pd
 import numpy as np
 
+# 1) データ読み込み
 pwt90 = pd.read_stata('https://www.rug.nl/ggdc/docs/pwt90.dta')
 
+# 2) 22のOECD国リスト
 oecd_countries = [
-    'Australia', 'Austria', 'Belgium', 'Canada', 'Denmark',
-    'Finland', 'France', 'Germany', 'Greece', 'Iceland',
-    'Ireland', 'Italy', 'Japan', 'Netherlands', 'New Zealand',
-    'Norway', 'Portugal', 'Spain', 'Sweden', 'Switzerland',
-    'United Kingdom', 'United States',
+    "Australia","Austria","Belgium","Canada","Denmark","Finland","France","Germany",
+    "Greece","Iceland","Ireland","Italy","Japan","Netherlands","New Zealand","Norway",
+    "Portugal","Spain","Sweden","Switzerland","United Kingdom","United States"
 ]
 
-data = pwt90[
-    pwt90['country'].isin(oecd_countries) &
-    pwt90['year'].between(1990, 2019)
-]
+# 3) 1960–2000年のデータをフィルタ
+data = (pwt90
+    .query("country in @oecd_countries and 1960 <= year <= 2000")
+    .loc[:, ['country','year','rgdpna','rkna','emp','avh','labsh','rtfpna']]
+    .dropna()
+    .copy()
+)
 
-relevant_cols = ['countrycode', 'country', 'year', 'rgdpna', 'rkna', 'pop', 'emp', 'avh', 'labsh', 'rtfpna']
-data = data[relevant_cols].dropna()
+# 4) 必要変数を計算
+data['alpha']    = 1 - data['labsh']                                  # 資本分配率
+data['y_n']      = data['rgdpna'] / data['emp']                        # Y/L
+data['hours']    = data['emp'] * data['avh']                           # 総労働時間
+data['tfp_term'] = data['rtfpna'] ** (1 / (1 - data['alpha']))         # A^(1/(1-α))
+data['cap_term'] = (data['rkna'] / data['rgdpna']) ** (data['alpha'] / (1 - data['alpha']))  # (K/Y)^(α/(1-α))
 
-# Calculate additional variables
-data['alpha'] = 1 - data['labsh']
-data['y_n'] = data['rgdpna'] / data['emp']  # Y/N
-data['hours'] = data['emp'] * data['avh']  # L
-data['tfp_term'] = data['rtfpna'] ** (1 / (1 - data['alpha']))  # A^(1/(1-alpha))
-data['cap_term'] = (data['rkna'] / data['rgdpna']) ** (data['alpha'] / (1 - data['alpha']))  # (K/Y)^(alpha/(1-alpha))
-data['lab_term'] = data['hours'] / data['pop']  # L/N
-data = data.sort_values('year').groupby('countrycode').apply(lambda x: x.assign(
-    alpha=1 - x['labsh'],
-    y_n_shifted=100 * x['y_n'] / x['y_n'].iloc[0],
-    tfp_term_shifted=100 * x['tfp_term'] / x['tfp_term'].iloc[0],
-    cap_term_shifted=100 * x['cap_term'] / x['cap_term'].iloc[0],
-    lab_term_shifted=100 * x['lab_term'] / x['lab_term'].iloc[0]
-)).reset_index(drop=True).dropna()
+# 5) 成長率計算関数（幾何平均を使用）
+def calc_growth(df):
+    start = df[df.year == df.year.min()].iloc[0]
+    end   = df[df.year == df.year.max()].iloc[0]
+    T     = end.year - start.year
 
+    # 幾何平均成長率（年率 %）
+    g_y = ((end.y_n    / start.y_n)    ** (1/T) - 1) * 100
+    g_k = ((end.cap_term / start.cap_term) ** (1/T) - 1) * 100
+    g_a = ((end.tfp_term / start.tfp_term) ** (1/T) - 1) * 100
 
-def calculate_growth_rates(country_data):
-    
-    start_year_actual = country_data['year'].min()
-    end_year_actual = country_data['year'].max()
-
-    start_data = country_data[country_data['year'] == start_year_actual].iloc[0]
-    end_data = country_data[country_data['year'] == end_year_actual].iloc[0]
-
-    years = end_data['year'] - start_data['year']
-
-    g_y = ((end_data['y_n'] / start_data['y_n']) ** (1/years) - 1) * 100
-
-    g_k = ((end_data['cap_term'] / start_data['cap_term']) ** (1/years) - 1) * 100
-
-    g_a = ((end_data['tfp_term'] / start_data['tfp_term']) ** (1/years) - 1) * 100
-
-    alpha_avg = (start_data['alpha'] + end_data['alpha']) / 2.0
-    capital_deepening_contrib = alpha_avg * g_k
-    tfp_growth_calculated = g_a
-    
-    tfp_share = (tfp_growth_calculated / g_y)
-    cap_share = (capital_deepening_contrib / g_y)
+    alpha_bar = (start.alpha + end.alpha) / 2
+    cap_dep   = alpha_bar * g_k
+    tfp_grow  = g_a
 
     return {
-        'Country': start_data['country'],
-        'Growth Rate': round(g_y, 2),
-        'TFP Growth': round(tfp_growth_calculated, 2),
-        'Capital Deepening': round(capital_deepening_contrib, 2),
-        'TFP Share': round(tfp_share, 2),
-        'Capital Share': round(cap_share, 2)
+        'Country':           start.country,
+        'Growth Rate':       round(g_y, 2),
+        'TFP Growth':        round(tfp_grow, 2),
+        'Capital Deepening': round(cap_dep, 2),
+        'TFP Share':         round(tfp_grow   / g_y, 2),
+        'Capital Share':     round(cap_dep    / g_y, 2)
     }
 
+# 6) 各国＋平均をまとめて表示
+results = data.groupby('country').apply(calc_growth).tolist()
+df_res  = pd.DataFrame(results)
 
-results_list = data.groupby('country').apply(calculate_growth_rates).dropna().tolist()
-results_df = pd.DataFrame(results_list)
-
-avg_row_data = {
+avg = {
     'Country': 'Average',
-    'Growth Rate': round(results_df['Growth Rate'].mean(), 2),
-    'TFP Growth': round(results_df['TFP Growth'].mean(), 2),
-    'Capital Deepening': round(results_df['Capital Deepening'].mean(), 2),
-    'TFP Share': round(results_df['TFP Share'].mean(), 2),
-    'Capital Share': round(results_df['Capital Share'].mean(), 2)
+    **{col: round(df_res[col].mean(), 2)
+       for col in df_res.columns if col!='Country'}
 }
-results_df = pd.concat([results_df, pd.DataFrame([avg_row_data])], ignore_index=True)
+df_res = pd.concat([df_res, pd.DataFrame([avg])], ignore_index=True)
 
-print("\nGrowth Accounting in OECD Countries: 1990-2019 period")
-print("="*85)
-print(results_df.to_string(index=False))
+print("Growth Accounting in OECD Countries: 1960–2000")
+print("="*80)
+print(df_res.to_string(index=False))
